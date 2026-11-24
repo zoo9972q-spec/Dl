@@ -1,0 +1,151 @@
+local Workspace = game:GetService("Workspace")
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+
+local LP = Players.LocalPlayer
+
+local CONFIG = {
+    TPEnabled = true,
+    ESPEnabled = true,
+    ContainerKeywords = {"crystal", "gem", "collectible"},
+    StreamRadius = 1024,
+    TPInterval = 0.8,
+    YOffset = 3,
+    MaxPartSize = 6,
+    ESPFill = Color3.fromRGB(0, 255, 100),
+    ESPOutline = Color3.fromRGB(0, 255, 0),
+}
+
+local visited = {}
+local tracked = {}
+local isRunning = false
+
+local function nameHas(obj, list)
+    local low = obj.Name:lower()
+    for _, kw in ipairs(list) do
+        if low:find(kw, 1, true) then return true end
+    end
+    return false
+end
+
+local function addESP(part)
+    if tracked[part] then return end
+    local hl = Instance.new("Highlight")
+    hl.Name = "CrystalESP"
+    hl.Adornee = part
+    hl.FillColor = CONFIG.ESPFill
+    hl.OutlineColor = CONFIG.ESPOutline
+    hl.FillTransparency = 0.5
+    hl.OutlineTransparency = 0.1
+    hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+    hl.Parent = part
+    tracked[part] = hl
+end
+
+local function cleanESP()
+    for part, hl in pairs(tracked) do
+        if not part or not part.Parent or not hl or not hl.Parent then
+            tracked[part] = nil
+        else
+            hl.Enabled = CONFIG.ESPEnabled
+        end
+    end
+end
+
+local function findContainers()
+    local t = {}
+    for _, top in ipairs(Workspace:GetChildren()) do
+        if (top:IsA("Folder") or top:IsA("Model")) and nameHas(top, CONFIG.ContainerKeywords) then
+            table.insert(t, top)
+        end
+    end
+    return t
+end
+
+local function preload(c)
+    if not Workspace.StreamingEnabled then return end
+    local pos = nil
+    if c:IsA("Model") then
+        local ok, p = pcall(function() return c:GetPivot().Position end)
+        if ok then pos = p end
+    end
+    if not pos then
+        for _, d in ipairs(c:GetDescendants()) do
+            if d:IsA("BasePart") then pos = d.Position break end
+        end
+    end
+    if pos then pcall(function() Workspace:RequestStreamAroundAsync(pos, CONFIG.StreamRadius) end) end
+end
+
+local function collectFrom(c)
+    local t = {}
+    for _, d in ipairs(c:GetDescendants()) do
+        if d:IsA("BasePart") then
+            local s = d.Size
+            if math.max(s.X, s.Y, s.Z) <= CONFIG.MaxPartSize then
+                table.insert(t, d)
+            end
+        end
+    end
+    return t
+end
+
+local function tpTo(pos)
+    local char = LP.Character
+    if not char then return false end
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    if not hrp then return false end
+    hrp.CFrame = CFrame.new(pos + Vector3.new(0, CONFIG.YOffset, 0))
+    return true
+end
+
+local function start()
+    if isRunning then return end
+    isRunning = true
+    task.spawn(function()
+        while true do
+            local containers = findContainers()
+            print("[Crystal] Containers found: " .. #containers)
+
+            if #containers > 0 then
+                for _, c in ipairs(containers) do preload(c) end
+                task.wait(0.5)
+            end
+
+            local all = {}
+            for _, c in ipairs(containers) do
+                for _, p in ipairs(collectFrom(c)) do
+                    table.insert(all, p)
+                    if CONFIG.ESPEnabled then addESP(p) end
+                end
+            end
+            print("[Crystal] Candidates: " .. #all)
+
+            cleanESP()
+
+            if CONFIG.TPEnabled and #all > 0 then
+                for _, part in ipairs(all) do
+                    if not CONFIG.TPEnabled then break end
+                    if part.Parent and not visited[part] then
+                        if tpTo(part.Position) then
+                            visited[part] = true
+                            print("[Crystal] TP -> " .. part:GetFullName())
+                        end
+                    end
+                    task.wait(CONFIG.TPInterval)
+                end
+            end
+            task.wait(1)
+        end
+    end)
+end
+
+_G.Crystal = {
+    ToggleTP = function(v) CONFIG.TPEnabled = v end,
+    ToggleESP = function(v) CONFIG.ESPEnabled = v end,
+    ResetVisited = function() visited = {} end,
+    Count = function() return #findContainers() end,
+}
+
+start()
+print("[Crystal TP+ESP] Loaded.")
